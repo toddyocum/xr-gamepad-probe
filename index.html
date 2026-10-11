@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gamepad XR Probe</title>
+<style>
+  :root { --bg: #0f1115; --fg: #e8eaf0; --dim: #8a90a0; --ok: #4ade80; --bad: #f87171; }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { color: var(--dim); margin: 0 0 16px; max-width: 640px; }
+  pre { background: #1a1d24; padding: 12px; border-radius: 8px; white-space: pre-wrap; font: 14px/1.35 ui-monospace, Menlo, monospace; }
+  button { font: 600 18px -apple-system, system-ui; padding: 14px 22px; border-radius: 12px; border: 0; background: #3b82f6; color: white; }
+  button:disabled { background: #444; }
+</style>
+</head>
+<body>
+<h1>Gamepad XR Probe</h1>
+<p>Pair the DualSense, press a button or two here, then tap Enter VR. Inside the session, a panel shows what the page can see. Move the left stick to slide the cube. Press Cross to try a rumble. Press Options to exit.</p>
+<button id="enter" disabled>Checking WebXR…</button>
+<pre id="flat">waiting…</pre>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const flat = document.getElementById('flat');
+const btn = document.getElementById('enter');
+
+// Counters that answer "does window rAF keep firing during an immersive session?"
+// (dsim drives its sim from window rAF, so this matters for the port.)
+let windowRafTicks = 0, xrFrames = 0;
+(function winTick() { windowRafTicks++; requestAnimationFrame(winTick); })();
+
+const log = [];
+function note(s) { log.push(`${new Date().toLocaleTimeString()} ${s}`); if (log.length > 6) log.shift(); }
+
+function padReport() {
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : null;
+  if (pads === null) return ['navigator.getGamepads: NOT AVAILABLE'];
+  if (pads.length === 0) return ['navigator.getGamepads(): [] (no pads; press a button)'];
+  return pads.flatMap(p => [
+    `#${p.index} "${p.id}" mapping=${p.mapping || '(none)'} connected=${p.connected}`,
+    `  axes: ${p.axes.map(a => a.toFixed(2)).join(' ')}`,
+    `  pressed: ${p.buttons.map((b, i) => b.pressed ? i : null).filter(i => i !== null).join(',') || '-'}` +
+      `  L2=${(p.buttons[6]?.value ?? 0).toFixed(2)} R2=${(p.buttons[7]?.value ?? 0).toFixed(2)}`,
+    `  rumble: ${p.vibrationActuator ? 'vibrationActuator present' : 'none'}`,
+  ]);
+}
+
+function sourcesReport(session) {
+  if (!session) return [];
+  const srcs = Array.from(session.inputSources);
+  if (srcs.length === 0) return ['session.inputSources: (none)'];
+  return srcs.map(s => `src ${s.handedness}/${s.targetRayMode} profiles=[${s.profiles.join(',')}] gamepad=${s.gamepad ? 'yes' : 'no'} hand=${s.hand ? 'yes' : 'no'}`);
+}
+
+function lines(session) {
+  return [
+    `secureContext=${window.isSecureContext}  navigator.xr=${'xr' in navigator}`,
+    `window rAF ticks=${windowRafTicks}  xr frames=${xrFrames}`,
+    ...padReport(),
+    ...sourcesReport(session),
+    '--- log',
+    ...log,
+  ];
+}
+
+// --- 2D readout before the session
+setInterval(() => { if (!renderer.xr.isPresenting) flat.textContent = lines(null).join('\n'); }, 100);
+window.addEventListener('gamepadconnected', e => note(`gamepadconnected: ${e.gamepad.id}`));
+window.addEventListener('gamepaddisconnected', e => note(`gamepaddisconnected: ${e.gamepad.id}`));
+
+// --- three.js scene: a text panel and a stick-driven cube
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+document.body.appendChild(renderer.domElement);
+renderer.domElement.style.display = 'none';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x202634);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 2));
+const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 100);
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshStandardMaterial({ color: 0x3a4152 }));
+floor.rotation.x = -Math.PI / 2;
+scene.add(floor);
+
+const canvas = document.createElement('canvas');
+canvas.width = 1400; canvas.height = 900;
+const ctx = canvas.getContext('2d');
+const tex = new THREE.CanvasTexture(canvas);
+tex.colorSpace = THREE.SRGBColorSpace;
+const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.9), new THREE.MeshBasicMaterial({ map: tex }));
+panel.position.set(0, 1.5, -1.6);
+scene.add(panel);
+
+const cube = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x4ade80 }));
+cube.position.set(0, 1.0, -1.2);
+scene.add(cube);
+
+function drawPanel(session) {
+  ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#e8eaf0'; ctx.font = '30px Menlo, monospace';
+  lines(session).forEach((l, i) => ctx.fillText(l.slice(0, 80), 24, 50 + i * 40));
+  tex.needsUpdate = true;
+}
+
+let prevPressed = [];
+renderer.setAnimationLoop((t, frame) => {
+  const session = renderer.xr.getSession();
+  if (frame) xrFrames++;
+  const pad = navigator.getGamepads ? Array.from(navigator.getGamepads()).find(Boolean) : null;
+  if (pad) {
+    const dz = v => Math.abs(v) < 0.12 ? 0 : v;
+    cube.position.x = THREE.MathUtils.clamp(cube.position.x + dz(pad.axes[0]) * 0.02, -1.5, 1.5);
+    cube.position.z = THREE.MathUtils.clamp(cube.position.z + dz(pad.axes[1]) * 0.02, -3, 0);
+    const pressed = pad.buttons.map(b => b.pressed);
+    const edge = i => pressed[i] && !prevPressed[i];
+    if (edge(0)) {  // Cross (standard mapping index 0)
+      const va = pad.vibrationActuator;
+      if (va?.playEffect) va.playEffect('dual-rumble', { duration: 300, strongMagnitude: 1, weakMagnitude: 1 })
+        .then(r => note(`rumble: ${r}`), e => note(`rumble error: ${e}`));
+      else note('rumble: no vibrationActuator.playEffect');
+    }
+    if (edge(9) && session) { note('Options → ending session'); session.end(); }  // Options
+    prevPressed = pressed;
+  }
+  if (session && xrFrames % 6 === 0) drawPanel(session);
+  renderer.render(scene, camera);
+});
+
+// --- Enter VR
+async function setup() {
+  if (!window.isSecureContext) { btn.textContent = 'Not a secure context (needs HTTPS)'; return; }
+  if (!navigator.xr) { btn.textContent = 'WebXR not available'; return; }
+  const ok = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
+  if (!ok) { btn.textContent = 'immersive-vr not supported'; return; }
+  btn.disabled = false; btn.textContent = 'Enter VR';
+  btn.onclick = async () => {
+    const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'hand-tracking'] });
+    note(`session started; window rAF ticks at entry=${windowRafTicks}`);
+    session.addEventListener('inputsourceschange', () => note(`inputsourceschange: ${session.inputSources.length} sources`));
+    session.addEventListener('end', () => note(`session ended; window rAF ticks=${windowRafTicks}`));
+    await renderer.xr.setSession(session);
+  };
+}
+setup();
+</script>
+</body>
+</html>
