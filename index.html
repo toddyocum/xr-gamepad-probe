@@ -17,6 +17,7 @@
 <body>
 <h1>Gamepad XR Probe</h1>
 <p>Pair the DualSense, press a button or two here, then tap Enter VR. Inside the session, a panel shows what the page can see. Move the left stick to slide the cube. Press Cross to try a rumble. Press Options to exit.</p>
+<div id="status" style="font:700 32px -apple-system,system-ui;padding:20px;border-radius:14px;margin:0 0 16px;background:#7f1d1d">NO CONTROLLER YET: look here and press a button</div>
 <button id="enter" disabled>Checking WebXR…</button>
 <pre id="flat">waiting…</pre>
 
@@ -70,7 +71,16 @@ function lines(session) {
 
 // --- 2D readout before the session
 let presenting = false;
-setInterval(() => { if (!presenting) flat.textContent = lines(null).join('\n'); }, 100);
+const statusEl = document.getElementById('status');
+function updateStatus() {
+  const p = navigator.getGamepads ? Array.from(navigator.getGamepads()).find(Boolean) : null;
+  if (!p) { statusEl.style.background = '#7f1d1d'; statusEl.textContent = 'NO CONTROLLER YET: look here and press a button'; return; }
+  const pressed = p.buttons.map((b, i) => b.pressed ? i : null).filter(i => i !== null);
+  const moving = p.axes.some(a => Math.abs(a) > 0.12);
+  statusEl.style.background = (pressed.length || moving) ? '#15803d' : '#166534';
+  statusEl.textContent = `CONTROLLER DETECTED ✓  ${pressed.length ? 'buttons ' + pressed.join(',') : moving ? 'stick moving' : '(press or move something)'}`;
+}
+setInterval(() => { updateStatus(); if (!presenting) flat.textContent = lines(null).join('\n'); }, 100);
 window.addEventListener('gamepadconnected', e => note(`gamepadconnected: ${e.gamepad.id}`));
 window.addEventListener('gamepaddisconnected', e => note(`gamepaddisconnected: ${e.gamepad.id}`));
 
@@ -107,8 +117,12 @@ scene.add(cube);
 
 function drawPanel(session) {
   ctx.fillStyle = '#0f1115'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const has = navigator.getGamepads && Array.from(navigator.getGamepads()).some(Boolean);
+  ctx.fillStyle = has ? '#15803d' : '#7f1d1d'; ctx.fillRect(0, 0, canvas.width, 110);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 64px -apple-system, sans-serif';
+  ctx.fillText(has ? 'CONTROLLER DETECTED IN VR ✓' : 'NO CONTROLLER IN VR ✗', 24, 80);
   ctx.fillStyle = '#e8eaf0'; ctx.font = '30px Menlo, monospace';
-  lines(session).forEach((l, i) => ctx.fillText(l.slice(0, 80), 24, 50 + i * 40));
+  lines(session).forEach((l, i) => ctx.fillText(l.slice(0, 80), 24, 160 + i * 40));
   tex.needsUpdate = true;
 }
 
@@ -117,6 +131,7 @@ renderer.setAnimationLoop((t, frame) => {
   const session = renderer.xr.getSession();
   if (frame) xrFrames++;
   const pad = navigator.getGamepads ? Array.from(navigator.getGamepads()).find(Boolean) : null;
+  cube.material.color.set(pad ? 0x4ade80 : 0xf87171);
   if (pad) {
     const dz = v => Math.abs(v) < 0.12 ? 0 : v;
     cube.position.x = THREE.MathUtils.clamp(cube.position.x + dz(pad.axes[0]) * 0.02, -1.5, 1.5);
