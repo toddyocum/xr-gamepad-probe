@@ -69,12 +69,15 @@ function lines(session) {
 }
 
 // --- 2D readout before the session
-setInterval(() => { if (!renderer.xr.isPresenting) flat.textContent = lines(null).join('\n'); }, 100);
+let presenting = false;
+setInterval(() => { if (!presenting) flat.textContent = lines(null).join('\n'); }, 100);
 window.addEventListener('gamepadconnected', e => note(`gamepadconnected: ${e.gamepad.id}`));
 window.addEventListener('gamepaddisconnected', e => note(`gamepaddisconnected: ${e.gamepad.id}`));
 
 // --- three.js scene: a text panel and a stick-driven cube
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ antialias: true }); }
+catch (e) { note(`WebGL failed: ${e.message}`); btn.textContent = 'WebGL unavailable'; throw e; }
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 document.body.appendChild(renderer.domElement);
@@ -144,7 +147,8 @@ async function setup() {
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'hand-tracking'] });
     note(`session started; window rAF ticks at entry=${windowRafTicks}`);
     session.addEventListener('inputsourceschange', () => note(`inputsourceschange: ${session.inputSources.length} sources`));
-    session.addEventListener('end', () => note(`session ended; window rAF ticks=${windowRafTicks}`));
+    session.addEventListener('end', () => { presenting = false; note(`session ended; window rAF ticks=${windowRafTicks}`); });
+    presenting = true;
     await renderer.xr.setSession(session);
   };
 }
